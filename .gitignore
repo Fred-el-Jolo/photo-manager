@@ -1,0 +1,24 @@
+# Go
+/photo-manager
+*.exe
+*.test
+*.out
+vendor/
+
+# Frontend (Electrobun/Bun)
+frontend/node_modules/
+frontend/build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Photo manager runtime
+*.photo-manager/
+/tmp/

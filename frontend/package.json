@@ -1,0 +1,15 @@
+{
+  "name": "photo-manager-frontend",
+  "private": true,
+  "dependencies": {
+    "electrobun": "^1.15.1"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  },
+  "scripts": {
+    "curate": "electrobun build && electrobun dev",
+    "build": "electrobun build"
+  }
+}
