@@ -148,6 +148,20 @@ function mergePhoto(updated) {
     }
   }
 }
+function photosByPaths(paths) {
+  if (!state.session)
+    return [];
+  const out = [];
+  for (const m of state.session.months) {
+    for (const g of m.groups) {
+      for (const p of g.photos) {
+        if (paths.has(p.path))
+          out.push(p);
+      }
+    }
+  }
+  return out;
+}
 function toast(message, kind = "info") {
   const container = document.getElementById("toast-container");
   if (!container)
@@ -221,6 +235,28 @@ async function applyGroup(group) {
   } catch (err) {
     toast(`Apply failed: ${err.message}`, "error");
   }
+}
+async function applyAllGroups() {
+  const groups = currentMonthGroups().filter((g) => !g.applied);
+  if (groups.length === 0) {
+    toast("All groups already applied");
+    return;
+  }
+  let done = 0;
+  for (const g of groups) {
+    try {
+      const updated = await api.applyGroup(g.id);
+      g.applied = updated.applied;
+      g.name = updated.name;
+      g.photos = updated.photos;
+      done++;
+    } catch (err) {
+      toast(`Apply failed for "${g.name || g.id}": ${err.message}`, "error");
+    }
+  }
+  if (done)
+    toast(`Applied ${done} group${done === 1 ? "" : "s"} ✓`);
+  render();
 }
 async function purgeDupes(group) {
   const keeper = keeperPath(group);
@@ -342,8 +378,16 @@ function renderContent() {
     content.appendChild(el("div", "empty", "Month not found."));
     return;
   }
-  const header = el("h1", "month-header", monthLabel(month.year, month.month));
-  content.appendChild(header);
+  const toolbar = el("div", "content-toolbar");
+  toolbar.appendChild(el("h1", "month-header", monthLabel(month.year, month.month)));
+  const unapplied = month.groups.filter((g) => !g.applied).length;
+  const applyAllBtn = el("button", "btn btn-apply-all", unapplied > 0 ? `Apply all (${unapplied})` : "All applied ✓");
+  applyAllBtn.disabled = unapplied === 0;
+  applyAllBtn.addEventListener("click", () => {
+    applyAllGroups();
+  });
+  toolbar.appendChild(applyAllBtn);
+  content.appendChild(toolbar);
   const filter = state.filter.trim().toLowerCase();
   const groups = filter ? month.groups.filter((g) => g.name.toLowerCase().includes(filter)) : month.groups;
   if (groups.length === 0) {
@@ -862,20 +906,16 @@ function renderSelectionHud() {
   row.appendChild(el("span", "selection-count", `${state.selected.size} photo${state.selected.size === 1 ? "" : "s"}`));
   const removeBtn = el("button", "btn selection-action", "\uD83D\uDDD1 Remove");
   removeBtn.addEventListener("click", async () => {
-    const paths = [...state.selected];
-    await batchPatch(paths, { is_removed: true });
-    state.selected.clear();
-    state.selectionMove = null;
+    await batchPatch([...state.selected], { is_removed: true });
     rerenderDynamic();
     renderSelectionHud();
   });
   row.appendChild(removeBtn);
-  const dupBtn = el("button", "btn selection-action", "⚑ Flag dupe");
+  const selectedPhotos = photosByPaths(state.selected);
+  const allFlagged = selectedPhotos.length > 0 && selectedPhotos.every((p) => p.is_duplicate);
+  const dupBtn = el("button", "btn selection-action" + (allFlagged ? " active" : ""), allFlagged ? "⚑ Unflag dupe" : "⚑ Flag dupe");
   dupBtn.addEventListener("click", async () => {
-    const paths = [...state.selected];
-    await batchPatch(paths, { is_duplicate: true });
-    state.selected.clear();
-    state.selectionMove = null;
+    await batchPatch([...state.selected], { is_duplicate: !allFlagged });
     rerenderDynamic();
     renderSelectionHud();
   });

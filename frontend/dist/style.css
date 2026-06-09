@@ -193,13 +193,40 @@ body {
   flex: 1;
   height: 100vh;
   overflow-y: auto;
-  padding: 24px 28px 80px;
+  padding: 0 28px 80px;
+}
+
+.content-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: var(--bg);
+  padding: 20px 0 12px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
 }
 
 .month-header {
   font-size: 22px;
   font-weight: 700;
-  margin: 0 0 20px;
+  margin: 0;
+  flex: 1;
+}
+
+.btn-apply-all {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: #fff;
+  white-space: nowrap;
+}
+
+.btn-apply-all:disabled {
+  background: var(--surface2);
+  border-color: var(--border);
+  color: var(--text-muted);
 }
 
 /* ─── Group card ───────────────────────────────────────────────────────────── */

@@ -137,6 +137,20 @@ function mergePhoto(updated: ApiPhoto): void {
   }
 }
 
+// Return all ApiPhoto objects whose paths are in the given set.
+function photosByPaths(paths: Set<string>): ApiPhoto[] {
+  if (!state.session) return [];
+  const out: ApiPhoto[] = [];
+  for (const m of state.session.months) {
+    for (const g of m.groups) {
+      for (const p of g.photos) {
+        if (paths.has(p.path)) out.push(p);
+      }
+    }
+  }
+  return out;
+}
+
 // ─── Toast notifications ─────────────────────────────────────────────────────
 
 function toast(message: string, kind: "info" | "error" = "info"): void {
@@ -227,6 +241,29 @@ async function applyGroup(group: ApiGroup): Promise<void> {
   } catch (err) {
     toast(`Apply failed: ${(err as Error).message}`, "error");
   }
+}
+
+// Apply every unapplied group in the current month in sequence, one render at end.
+async function applyAllGroups(): Promise<void> {
+  const groups = currentMonthGroups().filter((g) => !g.applied);
+  if (groups.length === 0) {
+    toast("All groups already applied");
+    return;
+  }
+  let done = 0;
+  for (const g of groups) {
+    try {
+      const updated = await api.applyGroup(g.id);
+      g.applied = updated.applied;
+      g.name = updated.name;
+      g.photos = updated.photos;
+      done++;
+    } catch (err) {
+      toast(`Apply failed for "${g.name || g.id}": ${(err as Error).message}`, "error");
+    }
+  }
+  if (done) toast(`Applied ${done} group${done === 1 ? "" : "s"} ✓`);
+  render();
 }
 
 // Purge dupes: mark every is_duplicate photo as is_removed, except the keeper.
@@ -370,8 +407,17 @@ function renderContent(): void {
     return;
   }
 
-  const header = el("h1", "month-header", monthLabel(month.year, month.month));
-  content.appendChild(header);
+  const toolbar = el("div", "content-toolbar");
+  toolbar.appendChild(el("h1", "month-header", monthLabel(month.year, month.month)));
+
+  const unapplied = month.groups.filter((g) => !g.applied).length;
+  const applyAllBtn = el("button", "btn btn-apply-all",
+    unapplied > 0 ? `Apply all (${unapplied})` : "All applied ✓");
+  applyAllBtn.disabled = unapplied === 0;
+  applyAllBtn.addEventListener("click", () => { void applyAllGroups(); });
+  toolbar.appendChild(applyAllBtn);
+
+  content.appendChild(toolbar);
 
   const filter = state.filter.trim().toLowerCase();
   const groups = filter
@@ -969,21 +1015,19 @@ function renderSelectionHud(): void {
 
   const removeBtn = el("button", "btn selection-action", "🗑 Remove");
   removeBtn.addEventListener("click", async () => {
-    const paths = [...state.selected];
-    await batchPatch(paths, { is_removed: true });
-    state.selected.clear();
-    state.selectionMove = null;
+    await batchPatch([...state.selected], { is_removed: true });
     rerenderDynamic();
     renderSelectionHud();
   });
   row.appendChild(removeBtn);
 
-  const dupBtn = el("button", "btn selection-action", "⚑ Flag dupe");
+  const selectedPhotos = photosByPaths(state.selected);
+  const allFlagged = selectedPhotos.length > 0 && selectedPhotos.every((p) => p.is_duplicate);
+  const dupBtn = el("button",
+    "btn selection-action" + (allFlagged ? " active" : ""),
+    allFlagged ? "⚑ Unflag dupe" : "⚑ Flag dupe");
   dupBtn.addEventListener("click", async () => {
-    const paths = [...state.selected];
-    await batchPatch(paths, { is_duplicate: true });
-    state.selected.clear();
-    state.selectionMove = null;
+    await batchPatch([...state.selected], { is_duplicate: !allFlagged });
     rerenderDynamic();
     renderSelectionHud();
   });
