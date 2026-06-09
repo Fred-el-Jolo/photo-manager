@@ -26,6 +26,8 @@ const MONTH_NAMES = [
 interface LightboxState {
   group: ApiGroup;
   index: number;
+  showMovePicker: boolean;
+  moveQuery: string;
 }
 
 interface CullState {
@@ -392,7 +394,7 @@ function renderGroupCard(group: ApiGroup): HTMLElement {
 
   const nameInput = el("input", "group-name") as HTMLInputElement;
   nameInput.type = "text";
-  nameInput.placeholder = "2024-03_event-name";
+  nameInput.placeholder = "group name";
   nameInput.value = group.name;
   const commit = () => { void saveGroupName(group, nameInput.value); };
   nameInput.addEventListener("blur", commit);
@@ -511,7 +513,7 @@ function rerenderDynamic(): void {
 // ─── Lightbox ────────────────────────────────────────────────────────────────
 
 function openLightbox(group: ApiGroup, index: number): void {
-  state.lightbox = { group, index };
+  state.lightbox = { group, index, showMovePicker: false, moveQuery: "" };
   renderLightbox();
 }
 
@@ -527,6 +529,103 @@ function lightboxStep(delta: number): void {
   renderLightbox();
 }
 
+// allGroups returns every group in the session with its parent month, sorted
+// chronologically then by name — used for the move picker.
+function allGroups(): Array<{ group: ApiGroup; year: number; month: number }> {
+  if (!state.session) return [];
+  const out: Array<{ group: ApiGroup; year: number; month: number }> = [];
+  for (const m of state.session.months) {
+    for (const g of m.groups) {
+      out.push({ group: g, year: m.year, month: m.month });
+    }
+  }
+  return out;
+}
+
+// groupFullId returns the display identifier for a group: "YYYY-MM_name" or
+// "YYYY-MM (unnamed)" when name is empty.
+function groupFullId(year: number, month: number, name: string): string {
+  const ym = `${year}-${String(month).padStart(2, "0")}`;
+  return name ? `${ym}_${name}` : `${ym} (unnamed)`;
+}
+
+// parseGroupId parses "YYYY-MM_name" into {year, month, name}.
+// Returns null if the format doesn't match.
+function parseGroupId(s: string): { year: number; month: number; name: string } | null {
+  const m = s.match(/^(\d{4})-(\d{2})_(.+)$/);
+  if (!m) return null;
+  return { year: parseInt(m[1], 10), month: parseInt(m[2], 10), name: m[3] };
+}
+
+async function movePhotoToGroup(photo: ApiPhoto, targetId: string): Promise<void> {
+  try {
+    const updated = await api.movePhoto(photo.path, targetId);
+    if (!state.session) return;
+    // Remove from source, update in target.
+    for (const m of state.session.months) {
+      for (const g of m.groups) {
+        const i = g.photos.findIndex((p) => p.path === photo.path);
+        if (i !== -1) g.photos.splice(i, 1);
+      }
+    }
+    for (const m of state.session.months) {
+      for (const g of m.groups) {
+        if (g.id === targetId) g.photos.push(updated);
+      }
+    }
+    toast("Moved ✓");
+    closeLightbox();
+    render();
+  } catch (err) {
+    toast(`Move failed: ${(err as Error).message}`, "error");
+  }
+}
+
+async function movePhotoByLabel(photo: ApiPhoto, label: string): Promise<void> {
+  // Try to find existing group by full id label first.
+  const parsed = parseGroupId(label);
+  if (!parsed) {
+    toast("Use format YYYY-MM_name (e.g. 2024-10_paris)", "error");
+    return;
+  }
+  // Check if a group with this label already exists.
+  const existing = allGroups().find(
+    ({ group, year, month }) =>
+      year === parsed.year && month === parsed.month && group.name === parsed.name,
+  );
+  if (existing) {
+    await movePhotoToGroup(photo, existing.group.id);
+    return;
+  }
+  // Create the group then move.
+  try {
+    const newGroup = await api.createGroup(parsed.year, parsed.month, parsed.name);
+    if (!state.session) return;
+    // Insert into local state.
+    let inserted = false;
+    for (const m of state.session.months) {
+      if (m.year === parsed.year && m.month === parsed.month) {
+        m.groups.push(newGroup);
+        inserted = true;
+        break;
+      }
+    }
+    if (!inserted) {
+      state.session.months.push({
+        year: parsed.year,
+        month: parsed.month,
+        groups: [newGroup],
+      });
+      state.session.months.sort((a, b) =>
+        a.year !== b.year ? a.year - b.year : a.month - b.month,
+      );
+    }
+    await movePhotoToGroup(photo, newGroup.id);
+  } catch (err) {
+    toast(`Failed to create group: ${(err as Error).message}`, "error");
+  }
+}
+
 function renderLightbox(): void {
   const box = document.getElementById("lightbox");
   if (!box) return;
@@ -537,7 +636,7 @@ function renderLightbox(): void {
     return;
   }
 
-  const { group, index } = state.lightbox;
+  const { group, index, showMovePicker, moveQuery } = state.lightbox;
   const photo = group.photos[index];
   if (!photo) {
     closeLightbox();
@@ -565,6 +664,90 @@ function renderLightbox(): void {
   next.addEventListener("click", () => lightboxStep(1));
   box.appendChild(next);
 
+  // Action bar
+  const actions = el("div", "lightbox-actions");
+
+  const rotBtn = el("button", "lightbox-action", "↻ Rotate");
+  rotBtn.addEventListener("click", async () => {
+    await rotatePhoto(photo);
+    if (state.lightbox) state.lightbox.group.photos[index] = { ...photo, rotation: (photo.rotation + 90) % 360 };
+    renderLightbox();
+  });
+  actions.appendChild(rotBtn);
+
+  const removeBtn = el("button", "lightbox-action" + (photo.is_removed ? " active" : ""),
+    photo.is_removed ? "↺ Restore" : "🗑 Remove");
+  removeBtn.addEventListener("click", async () => {
+    await toggleRemoved(photo);
+    renderLightbox();
+  });
+  actions.appendChild(removeBtn);
+
+  const dupBtn = el("button", "lightbox-action" + (photo.is_duplicate ? " active" : ""), "⚑ Dup");
+  dupBtn.addEventListener("click", async () => {
+    await toggleDuplicate(photo);
+    renderLightbox();
+  });
+  actions.appendChild(dupBtn);
+
+  const moveBtn = el("button", "lightbox-action" + (showMovePicker ? " active" : ""), "→ Move…");
+  moveBtn.addEventListener("click", () => {
+    if (state.lightbox) {
+      state.lightbox.showMovePicker = !state.lightbox.showMovePicker;
+      state.lightbox.moveQuery = "";
+    }
+    renderLightbox();
+  });
+  actions.appendChild(moveBtn);
+
+  box.appendChild(actions);
+
+  // Move picker (shown when → Move… is active)
+  if (showMovePicker) {
+    const picker = el("div", "lightbox-picker");
+
+    const input = el("input", "lightbox-picker-input") as HTMLInputElement;
+    input.type = "text";
+    input.placeholder = "2024-10_paris or select below";
+    input.value = moveQuery;
+    input.addEventListener("input", () => {
+      if (state.lightbox) state.lightbox.moveQuery = input.value;
+      renderLightbox();
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        void movePhotoByLabel(photo, input.value.trim());
+      }
+    });
+    picker.appendChild(input);
+
+    const list = el("div", "lightbox-picker-list");
+    const query = moveQuery.toLowerCase();
+    const groups = allGroups().filter(({ group: g, year, month }) => {
+      if (g.id === group.id) return false; // exclude current group
+      const label = groupFullId(year, month, g.name).toLowerCase();
+      return !query || label.includes(query);
+    });
+    for (const { group: g, year, month } of groups.slice(0, 12)) {
+      const label = groupFullId(year, month, g.name);
+      const item = el("button", "lightbox-picker-item", label);
+      item.addEventListener("click", () => { void movePhotoToGroup(photo, g.id); });
+      list.appendChild(item);
+    }
+    if (groups.length === 0) {
+      list.appendChild(el("div", "lightbox-picker-empty", "No matching groups"));
+    }
+    picker.appendChild(list);
+
+    const hint = el("div", "lightbox-picker-hint",
+      "Type YYYY-MM_name + Enter to create a new group and move");
+    picker.appendChild(hint);
+
+    box.appendChild(picker);
+  }
+
+  // Info bar
   const bar = el("div", "lightbox-bar");
   const dims = `${photo.width}×${photo.height}`;
   const blur = photo.blur_score.toFixed(2);

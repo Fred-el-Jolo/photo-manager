@@ -54,6 +54,7 @@ export interface PhotoPatch {
   is_removed?: boolean;
   is_duplicate?: boolean;
   new_name?: string;
+  target_group_id?: string;
 }
 
 // ─── Internal helpers ────────────────────────────────────────────────────────
@@ -126,6 +127,17 @@ export const api = {
 
   patchPhoto(patch: PhotoPatch): Promise<ApiPhoto> {
     return request<ApiPhoto>("/api/photos", jsonInit("PATCH", patch));
+  },
+
+  createGroup(year: number, month: number, name: string): Promise<ApiGroup> {
+    return request<ApiGroup>("/api/groups", jsonInit("POST", { year, month, name }));
+  },
+
+  movePhoto(path: string, targetGroupId: string): Promise<ApiPhoto> {
+    return request<ApiPhoto>(
+      "/api/photos",
+      jsonInit("PATCH", { path, target_group_id: targetGroupId }),
+    );
   },
 
   thumbnailUrl(path: string, size: ThumbSize): string {

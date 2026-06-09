@@ -133,3 +133,78 @@ func (s *Session) FindPhoto(path string) (*SessionPhoto, *Group) {
 	}
 	return nil, nil
 }
+
+// MovePhoto removes the photo at photoPath from its current group and appends
+// it to targetGroupID. Returns an error if either is not found.
+func (s *Session) MovePhoto(photoPath, targetGroupID string) error {
+	var srcGroup *Group
+	var photoIdx int
+	for i := range s.Months {
+		for j := range s.Months[i].Groups {
+			g := &s.Months[i].Groups[j]
+			for k := range g.Photos {
+				if g.Photos[k].Path == photoPath {
+					srcGroup = g
+					photoIdx = k
+				}
+			}
+		}
+	}
+	if srcGroup == nil {
+		return fmt.Errorf("photo not found: %s", photoPath)
+	}
+	dst := s.FindGroup(targetGroupID)
+	if dst == nil {
+		return fmt.Errorf("target group not found: %s", targetGroupID)
+	}
+	if srcGroup.ID == dst.ID {
+		return nil
+	}
+	photo := srcGroup.Photos[photoIdx]
+	srcGroup.Photos = append(srcGroup.Photos[:photoIdx], srcGroup.Photos[photoIdx+1:]...)
+	dst.Photos = append(dst.Photos, photo)
+	return nil
+}
+
+// CreateGroup ensures a group with the given (year, month, name) exists and
+// returns it. If a matching group already exists it is returned unchanged.
+func (s *Session) CreateGroup(year, month int, name string) *Group {
+	for i := range s.Months {
+		m := &s.Months[i]
+		if m.Year != year || m.Month != month {
+			continue
+		}
+		for j := range m.Groups {
+			if m.Groups[j].Name == name {
+				return &m.Groups[j]
+			}
+		}
+		m.Groups = append(m.Groups, Group{ID: NewGroupID(), Name: name})
+		return &m.Groups[len(m.Groups)-1]
+	}
+	s.Months = append(s.Months, MonthGroup{
+		Year:   year,
+		Month:  month,
+		Groups: []Group{{ID: NewGroupID(), Name: name}},
+	})
+	sortMonths(s.Months)
+	for i := range s.Months {
+		if s.Months[i].Year == year && s.Months[i].Month == month {
+			return &s.Months[i].Groups[len(s.Months[i].Groups)-1]
+		}
+	}
+	return nil
+}
+
+func sortMonths(months []MonthGroup) {
+	for i := 1; i < len(months); i++ {
+		for j := i; j > 0; j-- {
+			a, b := months[j-1], months[j]
+			if a.Year > b.Year || (a.Year == b.Year && a.Month > b.Month) {
+				months[j-1], months[j] = months[j], months[j-1]
+			} else {
+				break
+			}
+		}
+	}
+}

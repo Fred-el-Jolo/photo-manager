@@ -473,6 +473,114 @@ body {
   text-align: center;
 }
 
+/* ─── Lightbox actions ─────────────────────────────────────────────────────── */
+
+.lightbox-actions {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 102;
+  display: flex;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.75);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+}
+
+.lightbox-action {
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.lightbox-action:hover {
+  background: var(--border);
+}
+
+.lightbox-action.active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* ─── Move picker ──────────────────────────────────────────────────────────── */
+
+.lightbox-picker {
+  position: absolute;
+  top: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 102;
+  width: min(400px, 90vw);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lightbox-picker-input {
+  width: 100%;
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 13px;
+}
+
+.lightbox-picker-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.lightbox-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.lightbox-picker-item {
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 6px 10px;
+  text-align: left;
+  font-size: 13px;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+.lightbox-picker-item:hover {
+  border-color: var(--accent);
+  background: var(--border);
+}
+
+.lightbox-picker-empty {
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+  padding: 8px;
+}
+
+.lightbox-picker-hint {
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: center;
+}
+
 /* ─── Culling mode ─────────────────────────────────────────────────────────── */
 
 .thumb.cull-dim .thumb-img {

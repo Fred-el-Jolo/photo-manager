@@ -54,6 +54,7 @@ func New(sess *session.Session, staticDir string) http.Handler {
 	mux.HandleFunc("GET /api/groups/{id}", s.handleGetGroup)
 	mux.HandleFunc("PATCH /api/groups/{id}", s.handlePatchGroup)
 	mux.HandleFunc("POST /api/groups/{id}/apply", s.handleApplyGroup)
+	mux.HandleFunc("POST /api/groups", s.handleCreateGroup)
 	mux.HandleFunc("PATCH /api/photos", s.handlePatchPhoto)
 	mux.HandleFunc("GET /api/thumbnail", s.handleThumbnail)
 	mux.HandleFunc("GET /api/raw", s.handleRaw)
@@ -196,6 +197,32 @@ func (s *server) handleApplyGroup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, g)
 }
 
+func (s *server) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Year  int    `json:"year"`
+		Month int    `json:"month"`
+		Name  string `json:"name"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if body.Year == 0 || body.Month < 1 || body.Month > 12 {
+		writeError(w, http.StatusBadRequest, "year and month (1-12) are required")
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	g := s.sess.CreateGroup(body.Year, body.Month, body.Name)
+	if err := s.sess.Save(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save session")
+		return
+	}
+	writeJSON(w, http.StatusCreated, g)
+}
+
 func (s *server) handlePatchPhoto(w http.ResponseWriter, r *http.Request) {
 	var patch map[string]json.RawMessage
 	if err := readJSON(r, &patch); err != nil {
@@ -258,6 +285,19 @@ func (s *server) handlePatchPhoto(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		photo.NewName = v
+	}
+	if raw, ok := patch["target_group_id"]; ok {
+		var v string
+		if err := json.Unmarshal(raw, &v); err != nil {
+			writeError(w, http.StatusBadRequest, "target_group_id must be a string")
+			return
+		}
+		if err := s.sess.MovePhoto(path, v); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		// photo pointer is stale after move — re-fetch from new group
+		photo, _ = s.sess.FindPhoto(path)
 	}
 
 	if err := s.sess.Save(); err != nil {

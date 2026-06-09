@@ -43,6 +43,12 @@ var api = {
   patchPhoto(patch) {
     return request("/api/photos", jsonInit("PATCH", patch));
   },
+  createGroup(year, month, name) {
+    return request("/api/groups", jsonInit("POST", { year, month, name }));
+  },
+  movePhoto(path, targetGroupId) {
+    return request("/api/photos", jsonInit("PATCH", { path, target_group_id: targetGroupId }));
+  },
   thumbnailUrl(path, size) {
     return `/api/thumbnail?path=${encodeURIComponent(path)}&size=${size}`;
   },
@@ -354,7 +360,7 @@ function renderGroupCard(group) {
   const head = el("div", "group-head");
   const nameInput = el("input", "group-name");
   nameInput.type = "text";
-  nameInput.placeholder = "2024-03_event-name";
+  nameInput.placeholder = "group name";
   nameInput.value = group.name;
   const commit = () => {
     saveGroupName(group, nameInput.value);
@@ -461,7 +467,7 @@ function rerenderDynamic() {
   renderLightbox();
 }
 function openLightbox(group, index) {
-  state.lightbox = { group, index };
+  state.lightbox = { group, index, showMovePicker: false, moveQuery: "" };
   renderLightbox();
 }
 function closeLightbox() {
@@ -475,6 +481,88 @@ function lightboxStep(delta) {
   state.lightbox.index = (state.lightbox.index + delta + total) % total;
   renderLightbox();
 }
+function allGroups() {
+  if (!state.session)
+    return [];
+  const out = [];
+  for (const m of state.session.months) {
+    for (const g of m.groups) {
+      out.push({ group: g, year: m.year, month: m.month });
+    }
+  }
+  return out;
+}
+function groupFullId(year, month, name) {
+  const ym = `${year}-${String(month).padStart(2, "0")}`;
+  return name ? `${ym}_${name}` : `${ym} (unnamed)`;
+}
+function parseGroupId(s) {
+  const m = s.match(/^(\d{4})-(\d{2})_(.+)$/);
+  if (!m)
+    return null;
+  return { year: parseInt(m[1], 10), month: parseInt(m[2], 10), name: m[3] };
+}
+async function movePhotoToGroup(photo, targetId) {
+  try {
+    const updated = await api.movePhoto(photo.path, targetId);
+    if (!state.session)
+      return;
+    for (const m of state.session.months) {
+      for (const g of m.groups) {
+        const i = g.photos.findIndex((p) => p.path === photo.path);
+        if (i !== -1)
+          g.photos.splice(i, 1);
+      }
+    }
+    for (const m of state.session.months) {
+      for (const g of m.groups) {
+        if (g.id === targetId)
+          g.photos.push(updated);
+      }
+    }
+    toast("Moved ✓");
+    closeLightbox();
+    render();
+  } catch (err) {
+    toast(`Move failed: ${err.message}`, "error");
+  }
+}
+async function movePhotoByLabel(photo, label) {
+  const parsed = parseGroupId(label);
+  if (!parsed) {
+    toast("Use format YYYY-MM_name (e.g. 2024-10_paris)", "error");
+    return;
+  }
+  const existing = allGroups().find(({ group, year, month }) => year === parsed.year && month === parsed.month && group.name === parsed.name);
+  if (existing) {
+    await movePhotoToGroup(photo, existing.group.id);
+    return;
+  }
+  try {
+    const newGroup = await api.createGroup(parsed.year, parsed.month, parsed.name);
+    if (!state.session)
+      return;
+    let inserted = false;
+    for (const m of state.session.months) {
+      if (m.year === parsed.year && m.month === parsed.month) {
+        m.groups.push(newGroup);
+        inserted = true;
+        break;
+      }
+    }
+    if (!inserted) {
+      state.session.months.push({
+        year: parsed.year,
+        month: parsed.month,
+        groups: [newGroup]
+      });
+      state.session.months.sort((a, b) => a.year !== b.year ? a.year - b.year : a.month - b.month);
+    }
+    await movePhotoToGroup(photo, newGroup.id);
+  } catch (err) {
+    toast(`Failed to create group: ${err.message}`, "error");
+  }
+}
 function renderLightbox() {
   const box = document.getElementById("lightbox");
   if (!box)
@@ -484,7 +572,7 @@ function renderLightbox() {
     box.innerHTML = "";
     return;
   }
-  const { group, index } = state.lightbox;
+  const { group, index, showMovePicker, moveQuery } = state.lightbox;
   const photo = group.photos[index];
   if (!photo) {
     closeLightbox();
@@ -506,6 +594,79 @@ function renderLightbox() {
   const next = el("button", "lightbox-arrow lightbox-next", "›");
   next.addEventListener("click", () => lightboxStep(1));
   box.appendChild(next);
+  const actions = el("div", "lightbox-actions");
+  const rotBtn = el("button", "lightbox-action", "↻ Rotate");
+  rotBtn.addEventListener("click", async () => {
+    await rotatePhoto(photo);
+    if (state.lightbox)
+      state.lightbox.group.photos[index] = { ...photo, rotation: (photo.rotation + 90) % 360 };
+    renderLightbox();
+  });
+  actions.appendChild(rotBtn);
+  const removeBtn = el("button", "lightbox-action" + (photo.is_removed ? " active" : ""), photo.is_removed ? "↺ Restore" : "\uD83D\uDDD1 Remove");
+  removeBtn.addEventListener("click", async () => {
+    await toggleRemoved(photo);
+    renderLightbox();
+  });
+  actions.appendChild(removeBtn);
+  const dupBtn = el("button", "lightbox-action" + (photo.is_duplicate ? " active" : ""), "⚑ Dup");
+  dupBtn.addEventListener("click", async () => {
+    await toggleDuplicate(photo);
+    renderLightbox();
+  });
+  actions.appendChild(dupBtn);
+  const moveBtn = el("button", "lightbox-action" + (showMovePicker ? " active" : ""), "→ Move…");
+  moveBtn.addEventListener("click", () => {
+    if (state.lightbox) {
+      state.lightbox.showMovePicker = !state.lightbox.showMovePicker;
+      state.lightbox.moveQuery = "";
+    }
+    renderLightbox();
+  });
+  actions.appendChild(moveBtn);
+  box.appendChild(actions);
+  if (showMovePicker) {
+    const picker = el("div", "lightbox-picker");
+    const input = el("input", "lightbox-picker-input");
+    input.type = "text";
+    input.placeholder = "2024-10_paris or select below";
+    input.value = moveQuery;
+    input.addEventListener("input", () => {
+      if (state.lightbox)
+        state.lightbox.moveQuery = input.value;
+      renderLightbox();
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        movePhotoByLabel(photo, input.value.trim());
+      }
+    });
+    picker.appendChild(input);
+    const list = el("div", "lightbox-picker-list");
+    const query = moveQuery.toLowerCase();
+    const groups = allGroups().filter(({ group: g, year, month }) => {
+      if (g.id === group.id)
+        return false;
+      const label = groupFullId(year, month, g.name).toLowerCase();
+      return !query || label.includes(query);
+    });
+    for (const { group: g, year, month } of groups.slice(0, 12)) {
+      const label = groupFullId(year, month, g.name);
+      const item = el("button", "lightbox-picker-item", label);
+      item.addEventListener("click", () => {
+        movePhotoToGroup(photo, g.id);
+      });
+      list.appendChild(item);
+    }
+    if (groups.length === 0) {
+      list.appendChild(el("div", "lightbox-picker-empty", "No matching groups"));
+    }
+    picker.appendChild(list);
+    const hint = el("div", "lightbox-picker-hint", "Type YYYY-MM_name + Enter to create a new group and move");
+    picker.appendChild(hint);
+    box.appendChild(picker);
+  }
   const bar = el("div", "lightbox-bar");
   const dims = `${photo.width}×${photo.height}`;
   const blur = photo.blur_score.toFixed(2);

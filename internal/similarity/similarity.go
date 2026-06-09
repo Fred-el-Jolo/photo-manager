@@ -158,6 +158,12 @@ func HashFile(path string) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
+	return HashImage(img)
+}
+
+// HashImage computes the perceptual hash of an already-decoded image.
+// Use this when the caller has already decoded the image to avoid a second decode.
+func HashImage(img image.Image) (uint64, error) {
 	h, err := goimagehash.PerceptionHash(img)
 	if err != nil {
 		return 0, err

@@ -31,7 +31,7 @@ func ApplyGroup(group *session.Group, outputDir string) error {
 		filename := outputFilename(photo)
 
 		var destDir string
-		if photo.IsRemoved {
+		if photo.IsRemoved || photo.IsDuplicate {
 			destDir = filepath.Join(outputDir, "REMOVED")
 		} else {
 			destDir = groupDir(outputDir, group.Name, groupTime)
