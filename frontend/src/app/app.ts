@@ -526,7 +526,11 @@ function renderThumb(
   const badges = el("div", "badges");
   if (photo.is_removed) badges.appendChild(el("span", "badge badge-removed", "🗑"));
   if (photo.is_duplicate) badges.appendChild(el("span", "badge badge-dup", "⚠"));
-  if (keeper && photo.path === keeper) badges.appendChild(el("span", "badge badge-star", "★"));
+  if (keeper && photo.path === keeper) {
+    const starBadge = el("span", "badge badge-star", "★");
+    starBadge.title = "Suggested keeper — sharpest photo in this group";
+    badges.appendChild(starBadge);
+  }
   cell.appendChild(badges);
 
   // Hover action bar.
