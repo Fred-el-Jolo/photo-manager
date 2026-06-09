@@ -22,3 +22,9 @@ Thumbs.db
 # Photo manager runtime
 *.photo-manager/
 /tmp/
+
+# Test data (real photos — never version)
+/2026/
+
+# Claude Code agent infrastructure
+.claude/

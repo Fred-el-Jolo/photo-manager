@@ -73,22 +73,22 @@ Photos flow through stages in sequence:
 library/
   2024/
     03/
-      Paris/          # derived from GPS reverse-geocode or manual tag
+      48.85N_2.35E/   # raw GPS string when coordinates present
       Unknown/        # fallback when GPS absent
     04/
-      Vacation-Trip/  # event name (future: user-tagged)
+      48.85N_2.35E/
   .photo-manager/
     index.json        # library index: sha256, phash, EXIF cache, dest_path
 ```
 
-Location names come from reverse-geocoding GPS coordinates. When GPS is absent, photos land in `Unknown/`.
+GPS coordinates are stored as raw strings (e.g. `48.85N_2.35E`). Reverse-geocoding is not implemented.
 
 ### Similarity / Near-Duplicate Detection
 
 - Perceptual hash (pHash) via `github.com/corona10/goimagehash`
 - Hamming distance threshold (default: 10) groups similar photos; pass `--threshold` to adjust
 - `similarity.Group.Paths` uses `json:"paths"` tag — required for Go→JS JSON serialization
-- Greedy star clustering: groups A~B and A~C together, but B~C only if they also share a center node
+- Union-Find connected components: transitive grouping (A~B, B~C → all three in one group)
 
 ### Curate UI (Electrobun Desktop)
 

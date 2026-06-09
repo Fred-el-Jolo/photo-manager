@@ -2,6 +2,8 @@
 package importer
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -114,14 +116,24 @@ func importFile(srcPath string, opts Options, idx *storage.LibraryIndex, result 
 	dest := organizer.DestPath(opts.LibRoot, filepath.Base(srcPath), meta)
 
 	// Handle filename collisions
-	dest = resolveCollision(dest)
+	resolved, alreadyCopied := resolveCollision(dest, hash)
+	if alreadyCopied {
+		if opts.Verbose {
+			fmt.Printf("  skip (already at dest): %s\n", srcPath)
+		}
+		result.Duplicates++
+		return nil
+	}
+	dest = resolved
 
 	// Step 4: copy (or move) file
 	if err := copyFile(srcPath, dest); err != nil {
 		return fmt.Errorf("copying: %w", err)
 	}
 	if opts.Move {
-		_ = os.Remove(srcPath)
+		if err := os.Remove(srcPath); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to remove source %s: %v\n", srcPath, err)
+		}
 	}
 
 	// Step 5: compute perceptual hash (best-effort — skip on error)
@@ -170,20 +182,40 @@ func copyFile(src, dst string) error {
 	return out.Sync()
 }
 
-// resolveCollision appends a counter suffix if dest already exists.
-func resolveCollision(dest string) string {
+// resolveCollision returns the destination path to use and whether the source is already there.
+//   - (dest, false) → dest is free, proceed
+//   - ("", true)    → identical file already at dest, skip
+//   - (cand, false) → dest occupied by different file, cand has a free _N suffix
+func resolveCollision(dest, srcHash string) (string, bool) {
 	if _, err := os.Stat(dest); os.IsNotExist(err) {
-		return dest
+		return dest, false
+	}
+	// Existing file — skip if it has identical content (dedup crash-recovery).
+	if srcHash != "" && sha256OfFile(dest) == srcHash {
+		return "", true
 	}
 	ext := filepath.Ext(dest)
 	base := strings.TrimSuffix(dest, ext)
-	for i := 1; i < 1000; i++ {
+	for i := 1; i <= 999; i++ {
 		candidate := fmt.Sprintf("%s_%d%s", base, i, ext)
 		if _, err := os.Stat(candidate); os.IsNotExist(err) {
-			return candidate
+			return candidate, false
 		}
 	}
-	return dest
+	// All 999 suffixes occupied — warn and fall back to overwriting the original.
+	fmt.Fprintf(os.Stderr, "warning: 999 filename collisions for %s; overwriting\n", dest)
+	return dest, false
+}
+
+func sha256OfFile(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	h := sha256.New()
+	io.Copy(h, f) //nolint:errcheck
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func isImage(path string) bool {

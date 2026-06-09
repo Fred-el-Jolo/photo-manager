@@ -1,14 +1,19 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
+	"time"
 
-	"github.com/jolo/photo-manager/internal/frontend"
+	"github.com/jolo/photo-manager/internal/api"
 	"github.com/jolo/photo-manager/internal/importer"
-	"github.com/jolo/photo-manager/internal/similarity"
-	"github.com/jolo/photo-manager/internal/storage"
+	"github.com/jolo/photo-manager/internal/scanner"
+	"github.com/jolo/photo-manager/internal/session"
 	"github.com/spf13/cobra"
 )
 
@@ -24,7 +29,8 @@ func rootCmd() *cobra.Command {
 		Short: "Import, deduplicate, and organize your photo library",
 	}
 	root.AddCommand(importCmd())
-	root.AddCommand(curateCmd())
+	root.AddCommand(scanCmd())
+	root.AddCommand(serveCmd())
 	return root
 }
 
@@ -32,7 +38,6 @@ func importCmd() *cobra.Command {
 	var libRoot string
 	var move bool
 	var verbose bool
-	var curate bool
 
 	cmd := &cobra.Command{
 		Use:   "import <source-dir>",
@@ -50,11 +55,6 @@ func importCmd() *cobra.Command {
 			}
 			fmt.Printf("\nDone. imported=%d  duplicates=%d  errors=%d\n",
 				result.Imported, result.Duplicates, result.Errors)
-
-			if curate && result.Imported > 0 {
-				fmt.Println()
-				return runCurate(libRoot, similarity.DefaultThreshold)
-			}
 			return nil
 		},
 	}
@@ -62,82 +62,122 @@ func importCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&libRoot, "library", "l", "./library", "Path to the photo library root")
 	cmd.Flags().BoolVar(&move, "move", false, "Delete source files after import (default: copy only)")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Print each file as it's processed")
-	cmd.Flags().BoolVar(&curate, "curate", false, "Run similar-photo curation after import")
 
 	return cmd
 }
 
-func curateCmd() *cobra.Command {
-	var libRoot string
+func scanCmd() *cobra.Command {
+	var inputDir string
+	var outputDir string
 	var threshold int
+	var port int
+	var noWindow bool
+	var staticDir string
+	var verbose bool
 
 	cmd := &cobra.Command{
-		Use:   "curate",
-		Short: "Find similar photos and interactively pick keepers",
+		Use:   "scan",
+		Short: "Scan an input directory, build a curation session, and serve it",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runCurate(libRoot, threshold)
+			sess, err := scanner.Scan(inputDir, outputDir, threshold, func(done, total int) {
+				if verbose {
+					fmt.Printf("\r  scanning %d/%d", done, total)
+				}
+			})
+			if err != nil {
+				return err
+			}
+			if err := sess.Save(); err != nil {
+				return err
+			}
+			fmt.Printf("\nScanned %d months, %d groups\n", len(sess.Months), totalGroups(sess))
+			return runServe(sess, port, staticDir, noWindow)
 		},
 	}
 
-	cmd.Flags().StringVarP(&libRoot, "library", "l", "./library", "Path to the photo library root")
-	cmd.Flags().IntVarP(&threshold, "threshold", "t", similarity.DefaultThreshold,
-		"Hamming distance threshold (lower = stricter similarity)")
+	cmd.Flags().StringVar(&inputDir, "input", "", "Input directory to scan")
+	cmd.Flags().StringVar(&outputDir, "output", "", "Output directory for the session")
+	cmd.Flags().IntVar(&threshold, "threshold", 10, "Hamming distance threshold for grouping")
+	cmd.Flags().IntVar(&port, "port", 8080, "Port to serve the curation UI on")
+	cmd.Flags().BoolVar(&noWindow, "no-window", false, "Do not launch a desktop window")
+	cmd.Flags().StringVar(&staticDir, "static", defaultStaticDir(), "Directory of static frontend assets")
+	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Print scan progress")
 
 	return cmd
 }
 
-// runCurate is the shared logic for both `curate` and `import --curate`.
-func runCurate(libRoot string, threshold int) error {
-	idx, err := storage.Load(libRoot)
-	if err != nil {
-		return fmt.Errorf("loading library index: %w", err)
+func serveCmd() *cobra.Command {
+	var outputDir string
+	var port int
+	var noWindow bool
+	var staticDir string
+
+	cmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Serve an existing curation session",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sess, err := session.Load(outputDir)
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					fmt.Println("No session found. Run `scan` first.")
+					return nil
+				}
+				return err
+			}
+			return runServe(sess, port, staticDir, noWindow)
+		},
 	}
 
-	pHashes := idx.AllPHashes()
-	if len(pHashes) == 0 {
-		fmt.Println("No perceptual hashes in library — try re-importing.")
+	cmd.Flags().StringVar(&outputDir, "output", "", "Output directory containing the session")
+	cmd.Flags().IntVar(&port, "port", 8080, "Port to serve the curation UI on")
+	cmd.Flags().BoolVar(&noWindow, "no-window", false, "Do not launch a desktop window")
+	cmd.Flags().StringVar(&staticDir, "static", defaultStaticDir(), "Directory of static frontend assets")
+
+	return cmd
+}
+
+// runServe starts the HTTP server for the given session and optionally opens a window.
+func runServe(sess *session.Session, port int, staticDir string, noWindow bool) error {
+	handler := api.New(sess, staticDir)
+	addr := fmt.Sprintf(":%d", port)
+	srv := &http.Server{Addr: addr, Handler: handler}
+
+	if !noWindow {
+		go func() {
+			time.Sleep(300 * time.Millisecond)
+			_ = launchWindow(port)
+		}()
+	}
+
+	fmt.Printf("Serving on http://localhost:%d\n", port)
+	return srv.ListenAndServe()
+}
+
+// launchWindow opens the Electrobun desktop window pointed at the local server.
+// Best-effort: if it fails, fall back to printing the URL.
+func launchWindow(port int) error {
+	cmd := exec.Command("bun", "run", "--cwd", "frontend", "dev")
+	cmd.Env = append(os.Environ(), "PM_PORT="+strconv.Itoa(port))
+	if err := cmd.Start(); err != nil {
+		fmt.Printf("  (open http://localhost:%d in a browser)\n", port)
 		return nil
 	}
-
-	groups := similarity.GroupByHash(pHashes, threshold)
-	if len(groups) == 0 {
-		fmt.Println("No similar photo groups found.")
-		return nil
-	}
-
-	fmt.Printf("Found %d group(s) of similar photos.\n", len(groups))
-
-	toDelete, err := frontend.Run(groups, idx.Photos, libRoot)
-	if err != nil {
-		return fmt.Errorf("curation UI: %w", err)
-	}
-
-	if len(toDelete) == 0 {
-		fmt.Println("No photos marked for deletion.")
-		return nil
-	}
-
-	trashDir := filepath.Join(libRoot, ".photo-manager", "trash")
-	if err := os.MkdirAll(trashDir, 0755); err != nil {
-		return fmt.Errorf("creating trash dir: %w", err)
-	}
-
-	trashed := 0
-	for _, p := range toDelete {
-		dst := filepath.Join(trashDir, filepath.Base(p))
-		if err := os.Rename(p, dst); err != nil {
-			fmt.Fprintf(os.Stderr, "  error moving %s to trash: %v\n", filepath.Base(p), err)
-			continue
-		}
-		idx.Remove(p)
-		fmt.Printf("  trashed: %s\n", filepath.Base(p))
-		trashed++
-	}
-
-	if err := idx.Save(); err != nil {
-		return fmt.Errorf("saving index: %w", err)
-	}
-
-	fmt.Printf("\nDone. Trashed %d photo(s). Originals are in %s\n", trashed, trashDir)
 	return nil
+}
+
+func totalGroups(sess *session.Session) int {
+	n := 0
+	for _, m := range sess.Months {
+		n += len(m.Groups)
+	}
+	return n
+}
+
+// defaultStaticDir returns a path to frontend/dist relative to the executable,
+// falling back to a repo-relative path when os.Executable fails (e.g. in tests).
+func defaultStaticDir() string {
+	if exe, err := os.Executable(); err == nil {
+		return filepath.Join(filepath.Dir(exe), "frontend", "dist")
+	}
+	return "frontend/dist"
 }

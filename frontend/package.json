@@ -9,7 +9,8 @@
     "typescript": "^5"
   },
   "scripts": {
-    "curate": "electrobun build && electrobun dev",
-    "build": "electrobun build"
+    "dev": "electrobun build && electrobun dev",
+    "build": "electrobun build",
+    "build:spa": "bun build src/app/main.ts --outdir dist/ --sourcemap=none && cp src/app/index.html dist/index.html && cp src/app/style.css dist/style.css 2>/dev/null || true"
   }
 }
