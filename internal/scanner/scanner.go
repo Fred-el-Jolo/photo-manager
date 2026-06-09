@@ -109,7 +109,7 @@ func processOne(path string) (scannedPhoto, error) {
 	}, nil
 }
 
-func Scan(inputDir, outputDir string, threshold int, progress func(done, total int)) (*session.Session, error) {
+func Scan(inputDir, outputDir string, threshold, limit int, progress func(done, total int)) (*session.Session, error) {
 	sess := session.New(inputDir, outputDir)
 
 	var paths []string
@@ -127,6 +127,10 @@ func Scan(inputDir, outputDir string, threshold int, progress func(done, total i
 	})
 	if walkErr != nil {
 		return nil, fmt.Errorf("scanning %s: %w", inputDir, walkErr)
+	}
+
+	if limit > 0 && len(paths) > limit {
+		paths = paths[:limit]
 	}
 
 	if progress != nil {

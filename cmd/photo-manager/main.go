@@ -70,6 +70,7 @@ func scanCmd() *cobra.Command {
 	var inputDir string
 	var outputDir string
 	var threshold int
+	var limit int
 	var port int
 	var noWindow bool
 	var staticDir string
@@ -79,7 +80,7 @@ func scanCmd() *cobra.Command {
 		Use:   "scan",
 		Short: "Scan an input directory, build a curation session, and serve it",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			sess, err := scanner.Scan(inputDir, outputDir, threshold, func(done, total int) {
+			sess, err := scanner.Scan(inputDir, outputDir, threshold, limit, func(done, total int) {
 				if verbose {
 					fmt.Printf("\r  scanning %d/%d", done, total)
 				}
@@ -98,6 +99,7 @@ func scanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&inputDir, "input", "", "Input directory to scan")
 	cmd.Flags().StringVar(&outputDir, "output", "", "Output directory for the session")
 	cmd.Flags().IntVar(&threshold, "threshold", 10, "Hamming distance threshold for grouping")
+	cmd.Flags().IntVarP(&limit, "limit", "N", 0, "Max photos to scan (0 = all; useful for dev)")
 	cmd.Flags().IntVar(&port, "port", 8080, "Port to serve the curation UI on")
 	cmd.Flags().BoolVar(&noWindow, "no-window", false, "Do not launch a desktop window")
 	cmd.Flags().StringVar(&staticDir, "static", defaultStaticDir(), "Directory of static frontend assets")
