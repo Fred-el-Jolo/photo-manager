@@ -26,5 +26,8 @@ Thumbs.db
 # Test data (real photos — never version)
 /2026/
 
+# output folder
+output
+
 # Claude Code agent infrastructure
 .claude/
