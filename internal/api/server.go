@@ -412,11 +412,14 @@ func renderThumbnail(path string, dim uint) ([]byte, error) {
 
 // handleStatic serves files from staticDir, falling back to index.html for
 // extension-less paths (SPA client-side routing).
+// Cache-Control: no-cache forces browsers to always revalidate — prevents
+// stale JS/CSS after a rebuild.
 func (s *server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	clean := filepath.Clean("/" + r.URL.Path)
 	target := filepath.Join(s.staticDir, clean)
 
 	if info, err := os.Stat(target); err == nil && !info.IsDir() {
+		w.Header().Set("Cache-Control", "no-cache")
 		http.ServeFile(w, r, target)
 		return
 	}
@@ -425,6 +428,7 @@ func (s *server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	if filepath.Ext(clean) == "" {
 		index := filepath.Join(s.staticDir, "index.html")
 		if _, err := os.Stat(index); err == nil {
+			w.Header().Set("Cache-Control", "no-cache")
 			http.ServeFile(w, r, index)
 			return
 		}
