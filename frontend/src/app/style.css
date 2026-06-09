@@ -581,6 +581,62 @@ body {
   text-align: center;
 }
 
+/* ─── Selection HUD ────────────────────────────────────────────────────────── */
+
+#selection-hud {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 91;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 90vw;
+}
+
+.selection-hud-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  background: var(--surface2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  font-size: 13px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+
+.selection-count {
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.selection-action {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.selection-action.active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.selection-move-picker {
+  width: min(400px, 90vw);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+
 /* ─── Culling mode ─────────────────────────────────────────────────────────── */
 
 .thumb.cull-dim .thumb-img {

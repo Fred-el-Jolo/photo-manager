@@ -43,6 +43,7 @@ interface AppState {
   cull: CullState | null;
   selected: Set<string>; // photo paths
   filter: string; // group-name filter from command palette
+  selectionMove: { open: boolean; query: string } | null;
 }
 
 const state: AppState = {
@@ -53,6 +54,7 @@ const state: AppState = {
   cull: null,
   selected: new Set<string>(),
   filter: "",
+  selectionMove: null,
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -91,7 +93,7 @@ function keeperPath(group: ApiGroup): string | null {
   if (group.suggested_keeper) return group.suggested_keeper;
   let best: ApiPhoto | null = null;
   for (const p of group.photos) {
-    if (!best || p.blur_score > best.blur_score) best = p;
+    if (!best || (p.blur_score ?? 0) > (best.blur_score ?? 0)) best = p;
   }
   return best ? best.path : null;
 }
@@ -174,7 +176,7 @@ async function patchPhoto(
 }
 
 async function rotatePhoto(photo: ApiPhoto): Promise<void> {
-  const next = (photo.rotation + 90) % 360;
+  const next = ((photo.rotation ?? 0) + 90) % 360;
   await patchPhoto(photo.path, { rotation: next });
   toast("Saved");
   rerenderDynamic();
@@ -281,6 +283,7 @@ function render(): void {
   renderContent();
   renderLightbox();
   renderCullHud();
+  renderSelectionHud();
 }
 
 function renderSidebar(): void {
@@ -458,7 +461,7 @@ function renderThumb(
   img.src = api.thumbnailUrl(photo.path, state.thumbSize);
   img.alt = baseName(photo.path);
   img.loading = "eager";
-  img.style.transform = `rotate(${photo.rotation}deg)`;
+  img.style.transform = `rotate(${photo.rotation ?? 0}deg)`;
   img.addEventListener("click", () => openLightbox(group, index));
   cell.appendChild(img);
 
@@ -508,6 +511,7 @@ function rerenderDynamic(): void {
   renderSidebar();
   renderContent();
   renderLightbox();
+  renderSelectionHud();
 }
 
 // ─── Lightbox ────────────────────────────────────────────────────────────────
@@ -657,7 +661,7 @@ function renderLightbox(): void {
   const img = el("img", "lightbox-img") as HTMLImageElement;
   img.src = api.rawUrl(photo.path);
   img.alt = baseName(photo.path);
-  img.style.transform = `rotate(${photo.rotation}deg)`;
+  img.style.transform = `rotate(${photo.rotation ?? 0}deg)`;
   box.appendChild(img);
 
   const next = el("button", "lightbox-arrow lightbox-next", "›");
@@ -670,7 +674,6 @@ function renderLightbox(): void {
   const rotBtn = el("button", "lightbox-action", "↻ Rotate");
   rotBtn.addEventListener("click", async () => {
     await rotatePhoto(photo);
-    if (state.lightbox) state.lightbox.group.photos[index] = { ...photo, rotation: (photo.rotation + 90) % 360 };
     renderLightbox();
   });
   actions.appendChild(rotBtn);
@@ -749,8 +752,8 @@ function renderLightbox(): void {
 
   // Info bar
   const bar = el("div", "lightbox-bar");
-  const dims = `${photo.width}×${photo.height}`;
-  const blur = photo.blur_score.toFixed(2);
+  const dims = `${photo.width ?? 0}×${photo.height ?? 0}`;
+  const blur = (photo.blur_score ?? 0).toFixed(2);
   const date = photo.taken_at ? photo.taken_at : "no date";
   bar.textContent =
     `${baseName(photo.path)}  |  ${dims}  |  blur:${blur}  |  ${index + 1}/${group.photos.length}  |  ${date}`;
@@ -826,6 +829,186 @@ async function cullRemove(): Promise<void> {
 
 function cullSkip(): void {
   cullAdvance();
+}
+
+// ─── Selection actions ───────────────────────────────────────────────────────
+
+async function batchPatch(
+  paths: string[],
+  patch: { is_removed?: boolean; is_duplicate?: boolean },
+): Promise<void> {
+  let failed = 0;
+  await Promise.all(paths.map(async (p) => {
+    try {
+      const updated = await api.patchPhoto({ path: p, ...patch });
+      mergePhoto(updated);
+    } catch {
+      failed++;
+    }
+  }));
+  if (failed) toast(`${failed} operation${failed === 1 ? "" : "s"} failed`, "error");
+}
+
+async function moveSelectedToGroup(targetGroupId: string): Promise<void> {
+  const paths = [...state.selected];
+  let moved = 0;
+  for (const path of paths) {
+    try {
+      const updated = await api.movePhoto(path, targetGroupId);
+      if (state.session) {
+        for (const m of state.session.months) {
+          for (const g of m.groups) {
+            const i = g.photos.findIndex((p) => p.path === path);
+            if (i !== -1) g.photos.splice(i, 1);
+          }
+        }
+        for (const m of state.session.months) {
+          for (const g of m.groups) {
+            if (g.id === targetGroupId) g.photos.push(updated);
+          }
+        }
+        moved++;
+      }
+    } catch { /* skip failed moves */ }
+  }
+  state.selected.clear();
+  state.selectionMove = null;
+  if (moved) toast(`Moved ${moved} photo${moved === 1 ? "" : "s"} ✓`);
+  render();
+}
+
+async function bulkMoveSelected(label: string): Promise<void> {
+  const parsed = parseGroupId(label);
+  if (!parsed) {
+    toast("Use format YYYY-MM_name (e.g. 2024-10_paris)", "error");
+    return;
+  }
+  const existing = allGroups().find(
+    ({ group, year, month }) =>
+      year === parsed.year && month === parsed.month && group.name === parsed.name,
+  );
+  if (existing) {
+    await moveSelectedToGroup(existing.group.id);
+    return;
+  }
+  try {
+    const newGroup = await api.createGroup(parsed.year, parsed.month, parsed.name);
+    if (!state.session) return;
+    let inserted = false;
+    for (const m of state.session.months) {
+      if (m.year === parsed.year && m.month === parsed.month) {
+        m.groups.push(newGroup);
+        inserted = true;
+        break;
+      }
+    }
+    if (!inserted) {
+      state.session.months.push({ year: parsed.year, month: parsed.month, groups: [newGroup] });
+      state.session.months.sort((a, b) =>
+        a.year !== b.year ? a.year - b.year : a.month - b.month,
+      );
+    }
+    await moveSelectedToGroup(newGroup.id);
+  } catch (err) {
+    toast(`Failed: ${(err as Error).message}`, "error");
+  }
+}
+
+function renderSelectionHud(): void {
+  document.getElementById("selection-hud")?.remove();
+  if (state.selected.size === 0) return;
+
+  const hud = el("div", "selection-hud");
+  hud.id = "selection-hud";
+
+  // Move picker shown above the action row (flex column, rendered first)
+  if (state.selectionMove?.open) {
+    const picker = el("div", "selection-move-picker");
+
+    const input = el("input", "lightbox-picker-input") as HTMLInputElement;
+    input.type = "text";
+    input.placeholder = "2024-10_paris or select below";
+    input.value = state.selectionMove.query;
+    input.addEventListener("input", () => {
+      if (state.selectionMove) state.selectionMove.query = input.value;
+      renderSelectionHud();
+    });
+    input.addEventListener("keydown", async (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        await bulkMoveSelected(input.value.trim());
+      }
+    });
+    picker.appendChild(input);
+
+    const list = el("div", "lightbox-picker-list");
+    const query = state.selectionMove.query.toLowerCase();
+    const groups = allGroups().filter(({ group: g, year, month }) => {
+      const label = groupFullId(year, month, g.name).toLowerCase();
+      return !query || label.includes(query);
+    });
+    for (const { group: g, year, month } of groups.slice(0, 12)) {
+      const label = groupFullId(year, month, g.name);
+      const item = el("button", "lightbox-picker-item", label);
+      item.addEventListener("click", () => { void moveSelectedToGroup(g.id); });
+      list.appendChild(item);
+    }
+    if (groups.length === 0) {
+      list.appendChild(el("div", "lightbox-picker-empty", "No matching groups"));
+    }
+    picker.appendChild(list);
+    picker.appendChild(el("div", "lightbox-picker-hint",
+      "Type YYYY-MM_name + Enter to create a new group"));
+    hud.appendChild(picker);
+  }
+
+  // Action row
+  const row = el("div", "selection-hud-row");
+  row.appendChild(el("span", "selection-count",
+    `${state.selected.size} photo${state.selected.size === 1 ? "" : "s"}`));
+
+  const removeBtn = el("button", "btn selection-action", "🗑 Remove");
+  removeBtn.addEventListener("click", async () => {
+    const paths = [...state.selected];
+    await batchPatch(paths, { is_removed: true });
+    state.selected.clear();
+    state.selectionMove = null;
+    rerenderDynamic();
+    renderSelectionHud();
+  });
+  row.appendChild(removeBtn);
+
+  const dupBtn = el("button", "btn selection-action", "⚑ Flag dupe");
+  dupBtn.addEventListener("click", async () => {
+    const paths = [...state.selected];
+    await batchPatch(paths, { is_duplicate: true });
+    state.selected.clear();
+    state.selectionMove = null;
+    rerenderDynamic();
+    renderSelectionHud();
+  });
+  row.appendChild(dupBtn);
+
+  const moveBtn = el("button",
+    "btn selection-action" + (state.selectionMove?.open ? " active" : ""),
+    "→ Move to…");
+  moveBtn.addEventListener("click", () => {
+    state.selectionMove = state.selectionMove?.open ? null : { open: true, query: "" };
+    renderSelectionHud();
+  });
+  row.appendChild(moveBtn);
+
+  const clearBtn = el("button", "btn selection-action", "✕ Clear");
+  clearBtn.addEventListener("click", () => {
+    state.selected.clear();
+    state.selectionMove = null;
+    rerenderDynamic();
+    renderSelectionHud();
+  });
+  row.appendChild(clearBtn);
+
+  hud.appendChild(row);
+  document.body.appendChild(hud);
 }
 
 function renderCullHud(): void {
