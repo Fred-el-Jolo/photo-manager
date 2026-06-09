@@ -975,6 +975,11 @@ function onKeyDown(e) {
 async function init() {
   document.documentElement.style.setProperty("--thumb-size", THUMB_PX[state.thumbSize]);
   document.addEventListener("keydown", onKeyDown);
+  fetch("/version.json").then((r) => r.json()).then(({ v }) => {
+    const badge = document.getElementById("version-badge");
+    if (badge)
+      badge.textContent = v;
+  }).catch(() => {});
   try {
     const session = await api.getSession();
     state.session = session;

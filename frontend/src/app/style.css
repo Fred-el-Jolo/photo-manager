@@ -667,6 +667,20 @@ body {
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
 }
 
+/* ─── Version badge ────────────────────────────────────────────────────────── */
+
+#version-badge {
+  position: fixed;
+  bottom: 4px;
+  right: 8px;
+  z-index: 999;
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.5;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
 /* ─── Toasts ───────────────────────────────────────────────────────────────── */
 
 #toast-container {

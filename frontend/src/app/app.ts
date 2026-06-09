@@ -1106,6 +1106,14 @@ export async function init(): Promise<void> {
   document.documentElement.style.setProperty("--thumb-size", THUMB_PX[state.thumbSize]);
   document.addEventListener("keydown", onKeyDown);
 
+  fetch("/version.json")
+    .then((r) => r.json())
+    .then(({ v }: { v: string }) => {
+      const badge = document.getElementById("version-badge");
+      if (badge) badge.textContent = v;
+    })
+    .catch(() => { /* version badge is cosmetic, ignore errors */ });
+
   try {
     const session = await api.getSession();
     state.session = session;
