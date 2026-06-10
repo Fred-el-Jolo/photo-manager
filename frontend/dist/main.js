@@ -224,6 +224,17 @@ async function saveGroupName(group, name) {
     toast(`Save failed: ${err.message}`, "error");
   }
 }
+function focusNextGroupInput(afterGroupId) {
+  const cards = Array.from(document.querySelectorAll(".group-card"));
+  const idx = cards.findIndex((c) => c.dataset.groupId === afterGroupId);
+  for (let i = idx + 1;i < cards.length; i++) {
+    const input = cards[i].querySelector(".group-name");
+    if (input) {
+      input.focus();
+      return;
+    }
+  }
+}
 async function applyGroup(group) {
   try {
     const updated = await api.applyGroup(group.id);
@@ -231,7 +242,8 @@ async function applyGroup(group) {
     group.name = updated.name;
     group.photos = updated.photos;
     toast("Applied ✓");
-    render();
+    rerenderDynamic();
+    focusNextGroupInput(group.id);
   } catch (err) {
     toast(`Apply failed: ${err.message}`, "error");
   }
@@ -256,7 +268,7 @@ async function applyAllGroups() {
   }
   if (done)
     toast(`Applied ${done} group${done === 1 ? "" : "s"} ✓`);
-  render();
+  rerenderDynamic();
 }
 async function purgeDupes(group) {
   const keeper = keeperPath(group);
@@ -368,6 +380,7 @@ function renderContent() {
   const content = document.getElementById("content");
   if (!content || !state.session)
     return;
+  const savedScrollTop = content.scrollTop;
   content.innerHTML = "";
   if (!state.currentMonthKey) {
     content.appendChild(el("div", "empty", "Select a month from the sidebar."));
@@ -397,6 +410,7 @@ function renderContent() {
   for (const g of groups) {
     content.appendChild(renderGroupCard(g));
   }
+  content.scrollTop = savedScrollTop;
 }
 function renderGroupCard(group) {
   const card = el("section", "group-card");
@@ -404,20 +418,28 @@ function renderGroupCard(group) {
   if (group.applied)
     card.classList.add("applied");
   const head = el("div", "group-head");
+  const listId = `names-${group.id}`;
+  const datalist = document.createElement("datalist");
+  datalist.id = listId;
+  const seenNames = new Set;
+  for (const g of currentMonthGroups()) {
+    if (g.id !== group.id && g.name && !seenNames.has(g.name)) {
+      seenNames.add(g.name);
+      const opt = document.createElement("option");
+      opt.value = g.name;
+      datalist.appendChild(opt);
+    }
+  }
+  head.appendChild(datalist);
   const nameInput = el("input", "group-name");
   nameInput.type = "text";
   nameInput.placeholder = "group name";
   nameInput.value = group.name;
+  nameInput.setAttribute("list", listId);
   const commit = () => {
     saveGroupName(group, nameInput.value);
   };
   nameInput.addEventListener("blur", commit);
-  nameInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      nameInput.blur();
-    }
-  });
   head.appendChild(nameInput);
   const applyBtn = el("button", "btn btn-apply");
   if (group.applied) {
@@ -430,8 +452,18 @@ function renderGroupCard(group) {
     });
   }
   head.appendChild(applyBtn);
+  nameInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      requestAnimationFrame(() => {
+        nameInput.blur();
+        if (!applyBtn.disabled)
+          applyBtn.focus();
+      });
+    }
+  });
   const purgeBtn = el("button", "btn btn-purge", "Purge Dupes");
   purgeBtn.title = "Queue duplicates for removal (keeps sharpest)";
+  purgeBtn.tabIndex = -1;
   purgeBtn.addEventListener("click", () => {
     purgeDupes(group);
   });
@@ -469,6 +501,7 @@ function renderThumb(group, photo, index, keeper) {
   cell.appendChild(img);
   const checkbox = el("input", "thumb-check");
   checkbox.type = "checkbox";
+  checkbox.tabIndex = -1;
   checkbox.checked = state.selected.has(photo.path);
   if (groupHasSelection(group))
     cell.classList.add("show-check");
@@ -492,6 +525,7 @@ function renderThumb(group, photo, index, keeper) {
   const mkAction = (label, title, fn) => {
     const b = el("button", "thumb-action", label);
     b.title = title;
+    b.tabIndex = -1;
     b.addEventListener("click", (e) => {
       e.stopPropagation();
       fn();

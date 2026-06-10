@@ -230,6 +230,15 @@ async function saveGroupName(group: ApiGroup, name: string): Promise<void> {
   }
 }
 
+function focusNextGroupInput(afterGroupId: string): void {
+  const cards = Array.from(document.querySelectorAll<HTMLElement>(".group-card"));
+  const idx = cards.findIndex((c) => c.dataset.groupId === afterGroupId);
+  for (let i = idx + 1; i < cards.length; i++) {
+    const input = cards[i].querySelector<HTMLInputElement>(".group-name");
+    if (input) { input.focus(); return; }
+  }
+}
+
 async function applyGroup(group: ApiGroup): Promise<void> {
   try {
     const updated = await api.applyGroup(group.id);
@@ -237,7 +246,8 @@ async function applyGroup(group: ApiGroup): Promise<void> {
     group.name = updated.name;
     group.photos = updated.photos;
     toast("Applied ✓");
-    render();
+    rerenderDynamic();
+    focusNextGroupInput(group.id);
   } catch (err) {
     toast(`Apply failed: ${(err as Error).message}`, "error");
   }
@@ -263,7 +273,7 @@ async function applyAllGroups(): Promise<void> {
     }
   }
   if (done) toast(`Applied ${done} group${done === 1 ? "" : "s"} ✓`);
-  render();
+  rerenderDynamic();
 }
 
 // Purge dupes: mark every is_duplicate photo as is_removed, except the keeper.
@@ -392,6 +402,7 @@ function renderSidebar(): void {
 function renderContent(): void {
   const content = document.getElementById("content");
   if (!content || !state.session) return;
+  const savedScrollTop = content.scrollTop;
   content.innerHTML = "";
 
   if (!state.currentMonthKey) {
@@ -432,6 +443,7 @@ function renderContent(): void {
   for (const g of groups) {
     content.appendChild(renderGroupCard(g));
   }
+  content.scrollTop = savedScrollTop;
 }
 
 function renderGroupCard(group: ApiGroup): HTMLElement {
@@ -441,18 +453,27 @@ function renderGroupCard(group: ApiGroup): HTMLElement {
 
   const head = el("div", "group-head");
 
+  const listId = `names-${group.id}`;
+  const datalist = document.createElement("datalist");
+  datalist.id = listId;
+  const seenNames = new Set<string>();
+  for (const g of currentMonthGroups()) {
+    if (g.id !== group.id && g.name && !seenNames.has(g.name)) {
+      seenNames.add(g.name);
+      const opt = document.createElement("option");
+      opt.value = g.name;
+      datalist.appendChild(opt);
+    }
+  }
+  head.appendChild(datalist);
+
   const nameInput = el("input", "group-name") as HTMLInputElement;
   nameInput.type = "text";
   nameInput.placeholder = "group name";
   nameInput.value = group.name;
+  nameInput.setAttribute("list", listId);
   const commit = () => { void saveGroupName(group, nameInput.value); };
   nameInput.addEventListener("blur", commit);
-  nameInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      nameInput.blur();
-    }
-  });
   head.appendChild(nameInput);
 
   const applyBtn = el("button", "btn btn-apply");
@@ -465,8 +486,18 @@ function renderGroupCard(group: ApiGroup): HTMLElement {
   }
   head.appendChild(applyBtn);
 
+  nameInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      requestAnimationFrame(() => {
+        nameInput.blur();
+        if (!applyBtn.disabled) applyBtn.focus();
+      });
+    }
+  });
+
   const purgeBtn = el("button", "btn btn-purge", "Purge Dupes");
   purgeBtn.title = "Queue duplicates for removal (keeps sharpest)";
+  purgeBtn.tabIndex = -1;
   purgeBtn.addEventListener("click", () => { void purgeDupes(group); });
   head.appendChild(purgeBtn);
 
@@ -514,6 +545,7 @@ function renderThumb(
   // Multi-select checkbox (top-left).
   const checkbox = el("input", "thumb-check") as HTMLInputElement;
   checkbox.type = "checkbox";
+  checkbox.tabIndex = -1;
   checkbox.checked = state.selected.has(photo.path);
   if (groupHasSelection(group)) cell.classList.add("show-check");
   checkbox.addEventListener("click", (e) => {
@@ -538,6 +570,7 @@ function renderThumb(
   const mkAction = (label: string, title: string, fn: () => void) => {
     const b = el("button", "thumb-action", label);
     b.title = title;
+    b.tabIndex = -1;
     b.addEventListener("click", (e) => {
       e.stopPropagation();
       fn();
